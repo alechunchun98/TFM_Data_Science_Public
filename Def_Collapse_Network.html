@@ -1,0 +1,344 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <title>Clustered Network</title>
+</head>
+<body>
+  <style>
+    .faded { opacity: 0.2}
+    .highlight { opacity: 1}
+
+    div{		
+      text-align: center;			
+      width: 120px;					
+      height: 100px;					
+      padding: 2px;				
+      font: 14px sans-serif;		
+      background: lightsteelblue;	
+      border: 0px;		
+      border-radius: 8px;			
+      pointer-events: none;			
+  }
+    
+    circle.node {
+      stroke: #555;
+      stroke-width: 3px;
+    }
+    circle.leaf {
+      stroke: #fff;
+      stroke-width: 1.5px;
+    }
+  </style>
+  <h1>Clustered Network</h1>
+  <!--  <svg width="1080" height="600"></svg> -->
+  <script src="https://unpkg.com/d3@6.7.0/dist/d3.min.js"></script>
+    <script> 
+      const url = "https://gist.githubusercontent.com/alechunchun98/390d6367dc4725b5bd8e9219b69e87d6/raw/ca57a28e63e72488a129a90af975427937666674/minicol0.json"
+      
+      const color = d3.scaleOrdinal(d3.schemeCategory10)
+      const width = 1200;
+      const height = 680;
+      //const width = 1920;
+       //const width = 1080;
+
+      const svg = d3.select("body")
+       .append("svg")
+       .attr("width", width)
+       .attr("height", height)
+
+      
+      const centerX = width / 2 ;
+      const centerY = height / 2 ;
+
+      var dr = 40,      // default point radius
+        collapse = {}, // collapsed clusters
+        data, net, link, node;
+
+      var div = d3.select('body').append('div')
+        .attr('style', 'position: absolute; opacity: 0;');
+
+      function nodeid(n) {
+          return n.size ? "_g_"+n.layer : n.id;
+        }
+        
+      function linkid(l) {
+          var u = nodeid(l.source),
+              v = nodeid(l.target);
+          return u<v ? u+"|"+v : v+"|"+u;
+        }
+
+      function getLayer(n) { return n.layer; }
+
+
+      function network(data, prev, index, collapse, SurfMean, VolMean, NeurMean) {
+        collapse = collapse || {};
+        var gm = {},    // group map
+            nm = {},    // node map
+            lm = {},    // link map
+            gn = {},    // previous group nodes
+            gc = {},    // previous group centroids
+            nodes = [], // output nodes
+            links = []; // output links
+      
+        // process previous nodes for reuse or centroid calculation
+        if (prev) {
+          prev.nodes.forEach(function(n) {
+            var i = index(n), o;
+            if (n.size > 0) {
+              gn[i] = n;
+              n.size = 0;
+            } else {
+              o = gc[i] || (gc[i] = {x:0,y:0,count:0});
+              o.x += n.x;
+              o.y += n.y;
+              o.count += 1;
+            }
+          });
+        }
+      
+        // determine nodes
+
+        
+        for (var k=0; k<data.nodes.length; ++k) {
+          var n = data.nodes[k],
+              i = index(n),
+              l = gm[i] || (gm[i]=gn[i]) || (gm[i]={id:"None", layer:i, Surface:Math.round(SurfMean[i] * 100) / 100, 
+              Volume:Math.round(VolMean[i] * 100) / 100, Neuritic_Bifurcations:Math.round(NeurMean[i] * 100) / 100, size:0, nodes:[]});
+      
+          if (collapse[i] !== true) {
+            // the node should be directly visible
+            nm[n.id] = nodes.length;
+            nodes.push(n);
+            if (gn[i]) {
+              // place new nodes at cluster location (plus jitter)
+              n.x = gn[i].x + Math.random();
+              n.y = gn[i].y + Math.random();
+            }
+          } else {
+            // the node is part of a collapsed cluster
+            if (l.size == 0) {
+              // if new cluster, add to set and position at centroid of leaf nodes
+              nm[i] = nodes.length;
+              nodes.push(l);
+              if (gc[i]) {
+                l.x = gc[i].x / gc[i].count;
+                l.y = gc[i].y / gc[i].count;
+              }
+            }
+            l.nodes.push(n);
+          }
+        // always count group size as we also use it to tweak the force graph strengths/distances
+          l.size += 1;
+        n.group_data = l;
+        }
+      
+        for (i in gm) { gm[i].link_count = 0; }
+      
+        // determine links
+        for (k=0; k<data.links.length; ++k) {
+          var e = data.links[k],
+              u = index(e.source),
+              v = index(e.target);
+        if (u != v) {
+          gm[u].link_count++;
+          gm[v].link_count++;
+        }
+          u = !collapse[u] ? nm[e.source.id] : nm[u];
+          v = !collapse[v] ? nm[e.target.id] : nm[v];
+          var i = (u<v ? u+"|"+v : v+"|"+u),
+              l = lm[i] || (lm[i] = {source:u, target:v, size:0});
+          l.size += 1;
+        }
+        for (i in lm) { links.push(lm[i]); }
+      
+        return {nodes: nodes, links: links};
+      }
+      
+      
+
+      const simulation = d3.forceSimulation()
+        .force("link", d3.forceLink())//.distance(500)
+        .force("charge", d3.forceManyBody().strength(-10000).distanceMin(200).distanceMax(4000))
+        .force("center", d3.forceCenter(centerX, centerY));
+
+      const dragInteraction = d3.drag().on("drag", (event, node) => {
+          //node.x = event.x;
+          //node.y = event.y;
+          node.fx = event.x;   //fixed place
+          node.fy = event.y;   //fixed place
+          simulation.alpha(1)
+          simulation.restart();
+      });
+        
+
+      d3.json(url).then(json => {
+        data = json;
+
+        for (var i=0; i<data.links.length; ++i) {
+          o = data.links[i];
+          o.source = data.nodes[o.source];
+          o.target = data.nodes[o.target];
+        }
+
+        //Get the Means of Surface, Volume and Neuritic Bifurcations
+
+        var SurfMean = [0,0,0,0,0,0,0]
+        var VolMean = [0,0,0,0,0,0,0]
+        var NeurMean = [0,0,0,0,0,0,0]
+
+        for (var k=0; k<data.nodes.length; ++k) { 
+          var n = data.nodes[k]
+          var lay = n.layer
+
+          if (SurfMean[lay] == 0) {
+            SurfMean[lay] = n.Surface
+          } else {
+            SurfMean[lay] = (SurfMean[lay] + n.Surface) / 2;
+          }
+
+          if (VolMean[lay] == 0) {
+            VolMean[lay] = n.Volume
+          } else {
+            VolMean[lay] = (VolMean[lay] + n.Volume) / 2;
+          }
+
+          if (NeurMean[lay] == 0) {
+            NeurMean[lay] = n.Neuritic_Bifurcations
+          } else {
+            NeurMean[lay] = (NeurMean[lay] + n.Neuritic_Bifurcations) / 2;
+          }        
+        };
+
+        //Function to highlight nodes, links and show data
+
+        function highlightNode(event, node) {
+          d3.selectAll("circle").classed("faded", d => !(d === node
+                || net.links.filter( k => k.source == node)
+                            .filter(m => m.target == d).length > 0
+                || net.links.filter( k => k.target == node)
+                            .filter(m => m.source == d).length > 0));
+                    
+     
+          d3.selectAll("line").classed("faded", edge => !(edge.source === node ||
+                                                      edge.target === node));
+
+          d3.selectAll("div")
+            .style("opacity", 0.9)
+            .html("Id: " + node.id + "<br>Layer: " + node.layer + "<br>Surface: " + node.Surface + 
+            "<br>Volume: " + node.Volume + "<br>Neuritic Bifurcations: " + node.Neuritic_Bifurcations)
+            .style("left", (event.x+30) + "px")
+            .style("top", (event.y) + "px")
+          d3.select(this)
+            .style("stroke", "black")
+            .style("stroke-width", "5")                                                
+        };
+
+        //Hide highlight part when mouse is out of the node
+        function fade() {
+          d3.selectAll("circle", "line").classed("faded , highlight", false)
+          
+          d3.selectAll("div")
+            .style("opacity", 0)
+          d3.select(this)
+            .style("stroke", "none")
+        }
+
+        const g = svg.append("g");
+       
+        init();         ///////Calling the main function
+
+        function init() {
+
+          net = network(data, net, getLayer, collapse, SurfMean, VolMean, NeurMean);
+
+          var link = g
+              .selectAll("line")
+              .data(net.links, linkid)
+              .enter()
+              .append("line")
+              .attr("stroke", "black")
+              .attr("stroke-opacity", "1")
+              .attr("stroke-width", "5")
+              
+
+          var node = g
+              .selectAll("circle.node")
+              .data(net.nodes, nodeid)
+              .enter()
+              .append("circle")
+              .attr("class", function(d) { return "node" + (d.size?"":" leaf"); })
+              .attr("fill", function(d) { return color(d.layer); })
+              .attr("r", function(d) { return d.size ? d.size + dr : dr+1; })
+              .call(dragInteraction)
+              .on("mouseover", highlightNode)
+              .on("mouseout", fade)
+              .on("click", function(event, d) {
+                //console.log(net.nodes)
+                console.log("node click", d, arguments, this, collapse[d.layer]);
+                        collapse[d.layer] = !collapse[d.layer];
+                      node.remove();
+                      link.remove();
+                      simulation.alpha(1)
+                      simulation.restart();
+                      init();
+                      });;
+
+          const zoom = d3.zoom().on("zoom", e => {
+                g.attr("transform", (transform = e.transform));
+            });
+
+          const legend = svg.selectAll(".legend")
+            .data(color.domain())
+            .enter().append("g")
+            .attr("class", "legend")
+            .attr("transform", function(d, i) { return "translate(0," + i * 20 + ")"; });
+
+            legend.append("rect")
+                .attr("x", width - 18)
+                .attr("width", 18)
+                .attr("height", 18)
+                .style("fill", color);
+
+            legend.append("text")
+                .attr("x", width - 24)
+                .attr("y", 9)
+                .attr("dy", ".35em")
+                .style("text-anchor", "end")
+                .style("fill", color)
+                .text(function(d) { return "Layer " + d; });
+            
+
+          simulation
+            .nodes(net.nodes)
+                .on("tick", () => {
+                  link
+                    .attr("x1", d => d.source.x)
+                    .attr("y1", d => d.source.y)
+                    .attr("x2", d => d.target.x)
+                    .attr("y2", d => d.target.y);
+            
+                  node
+                    .attr("cx", d => d.x)
+                    .attr("cy", d => d.y);
+                
+            })  
+          
+          simulation
+              .force("link")
+              .links(net.links);
+
+            //d3.selectAll("circle")
+
+          d3.select("svg").call(zoom)
+
+        }
+        })
+
+
+    </script>
+</body>
+    
+
+
+
+
